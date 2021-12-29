@@ -3,10 +3,10 @@ import random
 import re
 import argparse
 import unicodedata
-
 from rich.table import Table
+from rich.panel import Panel
 from bs4 import BeautifulSoup
-from rich.prompt import Prompt
+from rich.prompt import Prompt, Confirm
 from rich.pretty import pprint
 from rich.console import Console
 from ebooklib import epub, ITEM_DOCUMENT
@@ -82,7 +82,8 @@ def select_part():
 
     # Get the user's selection
     selection = Prompt.ask("Select a Part: ", choices=[*temp_selection_store])
-    console.print(f'\nYou selected: [green]{temp_selection_store[selection]}[/green]')
+    console.clear()
+    console.print(f'\nYou selected: [green bold]{temp_selection_store[selection]}[/green bold]\n')
     return pt_name__ch_index[temp_selection_store[selection]]
 
 
@@ -100,8 +101,9 @@ def select_chapter(part_chapters):
 
     # Get the user's selection
     selection = Prompt.ask("Select a Chapter: ", choices=[*temp_selection_store])
-    console.print(f'\nYou selected: [green]{temp_selection_store[selection]}[/green]')
-    return part_chapters[temp_selection_store[selection]]
+    console.clear()
+    console.print(f'\nYou selected: [green bold]{temp_selection_store[selection]}[/green bold]\n')
+    return part_chapters[temp_selection_store[selection]], temp_selection_store[selection]
 
 
 user_part_selection = select_part()
@@ -112,26 +114,26 @@ question_answer_store = {}
 
 # Now we open the book up again & find the chapter the user selected
 for item in book.get_items_of_type(ITEM_DOCUMENT):
-    if item.file_name == user_chapter_selection:
-        console.print(f'\n[green][bold]Success![/bold] We found the following chapter:[/green]\n[deep_sky_blue1]{item.title}[/deep_sky_blue1]\n', highlight=False)
+    if item.file_name == user_chapter_selection[0]:
+        console.print(f'\n[green][bold]Success![/bold] We found the following chapter:[/green][deep_sky_blue1]{user_chapter_selection[1]}[/deep_sky_blue1]\n', highlight=False)
         # console.print(item.get_content())
         soup = BeautifulSoup(item.get_content(), 'html.parser')
+        # console.print(soup.prettify())
 
         # Find the questions and answers
-        for question_or_answer in soup.find_all('p', class_='ques'):
+        for question_or_answer in soup.find_all('p', class_=['ques', 'ques1']):
 
             # This is the ID of the question or answer, they are slightly different which is why we have a standardized ID we define below (remove unique prefix)
             q_or_a_id = question_or_answer.find('a', href=True)['id']
 
             # Set a key we can use to store the question and answer
             qa_key = str(q_or_a_id).removeprefix('r_')
-
             # Identify if this is a question or answer by check the link id
             if q_or_a_id.startswith('r_'):  # This is a question
                 # Set the question value now and also the choices for the question. We can't set the answer yet because its only revealed later in the chapter (need more loops)
                 clean_question = unicodedata.normalize("NFKD", question_or_answer.text)
 
-                question_answer_store[qa_key] = {'question': unicodedata.normalize("NFKD", clean_question[2:].strip()), 'answer': [], 'explanation': '', 'choices': {}}
+                question_answer_store[qa_key] = {'question': unicodedata.normalize("NFKD", clean_question[3:].strip()), 'answer': [], 'explanation': '', 'choices': {}}
                 # Add the multiple choice options
                 for option in question_or_answer.find_next_siblings('p', class_='alpha', limit=4):
                     question_answer_store[qa_key]['choices'].update({option.text[:1]: unicodedata.normalize("NFKD", option.text[2:].strip())})
@@ -144,39 +146,92 @@ for item in book.get_items_of_type(ITEM_DOCUMENT):
                 if not answer_re_match:
                     console.print(f'\n[red]Error[/red] - The answer [yellow]{clean_answer}[/yellow] does not match the expected format.\n')
                     continue
-                question_answer_store[qa_key]['answer'] = answer_re_match.group(2).replace('and', ',').replace(' ', '').split(',')
+                question_answer_store[qa_key]['answer'] = answer_re_match.group(2).replace('and', '').replace(' ', '').split(',')
                 question_answer_store[qa_key]['explanation'] = answer_re_match.group(3).lstrip()
-
         # If we've found the correct chapter & finished collecting the questions and answers, break out of the loop
         break
 
 
-# pprint(question_answer_store, expand_all=True)
+
+# Randomize the order of the questions & start the quiz
+quiz_key_order = list(question_answer_store.keys())
+random.shuffle(quiz_key_order)
+
+# Keep track of the user's score and if a user gets a question wrong but tries again do not count it as a correct answer
+user_results = {}
 
 
-# Now we'll use the question_answer_store to create the quiz
-# Use a while loop to keep asking questions until the user answers all of them correctly or quits
-while True:
-    random_question = random.choice(list(question_answer_store.keys()))
-    choices = question_answer_store[random_question]['choices']
-    answer = question_answer_store[random_question]['answer']
-    explanation = question_answer_store[random_question]['explanation']
-    console.clear()
-    console.print(f'\n[green]{question_answer_store[random_question]["question"]}[/green]\n')
-    for choice in choices:
-        console.print(f'[green]{choice}[/green] - {choices[choice]}')
-    user_guess_input = Prompt.ask('Input:', choices=list(choices.keys()))
-    if user_guess_input in answer:
-        console.print(f'\n[green]Correct![/green]\n')
-    else:
-        console.print(f'\n[red]Incorrect![/red]\n')
-        console.print(f'[green]The correct answer is:[/green]\n')
-        for answer_choice in answer:
-            console.print(f'[green]{answer_choice}[/green] - {choices[answer_choice]}')
-        console.print(f'\n[green]{explanation}[/green]\n')
-    user_continue_input = Prompt.ask('Continue?', choices=['y', 'n'])
-    if user_continue_input == 'n':
-        break
+for q_index, question_key in enumerate(quiz_key_order):
+    user_results[question_key] = {'points': -1, 'guess': []}
+    while True:
+        console.clear()
+        console.print(Panel(f'Quiz | {user_chapter_selection[1]} | Question {q_index + 1}/{len(quiz_key_order)}', style='bold green'))
+
+        console.print(f'\n{question_answer_store[question_key]["question"]}\n', style='chartreuse3 bold')
+        # Print the choices
+        for choice_key, choice in question_answer_store[question_key]['choices'].items():
+            console.print(f'[green bold]{choice_key}.[/green bold] [sky_blue3]{choice}[/sky_blue3]')
+
+        # Get the user's answer
+        if len(question_answer_store[question_key]['answer']) > 1:  # First we need to check if this is a "Choose all that apply" question
+            # Remove all whitespace, leading and trailing commas and split the answer into a list using commas as the delimiter
+            user_answer = console.input(f'\n[medium_purple3]Your Answer (comma separated):[/medium_purple3]').replace(' ', '').strip(',').split(',')
+        else:
+            # Even if this is a single answer question, we still store it as a list so, we can use the same code for multiple answers (list comparison) (Also, we already store the correct answer as a list :shrug:)
+            user_answer = Prompt.ask(f'\n[medium_purple3]Your Answer:[/medium_purple3]', choices=[*question_answer_store[question_key]['choices']]).split()
+
+        # Check if the user got the question right (Single/Multiple answers are stored as lists for code re-usability)
+        if set(user_answer) == set(question_answer_store[question_key]['answer']):
+            # Check if this is the users first attempt at this question & if so, give them a point
+            if user_results[question_key]['points'] == -1:
+                user_results[question_key]['points'] = 1
+            console.line()
+            console.rule('[chartreuse3 bold]Correct![/chartreuse3 bold]')
+            console.print(f'[sky_blue3]{question_answer_store[question_key]["explanation"]}[/sky_blue3]')
+            if Confirm.ask(f'\n[green bold]Continue?[/green bold]', default=True):
+                break
+
+        else:
+            # Check if this is the users first attempt at this question & if so, give them zero points
+            if user_results[question_key]['points'] == -1:
+                user_results[question_key]['points'] = 0
+
+            # If the user got the question wrong, append the user's attempt to the list of guesses
+            user_results[question_key]['guess'].append(user_answer[0])
+            console.line()
+            console.rule(title='[red]Incorrect![/red]', style='red')
+            if Confirm.ask('\n[yellow3 bold]Try Again?[/yellow3 bold]', default=True):
+                continue
+            else:
+                user_results[question_key]['points'] = 0
+                break
+
+# Print the user's results
+console.clear()
+console.print(Panel(f'Quiz | {user_chapter_selection[1]} | Results', style='bold green'))
+
+total_points = 0
+
+console.print(f'\n[green bold]Incorrect Answers:[/green bold]')
+for question_key, question_result in user_results.items():
+    total_points += question_result['points']
+    if question_result['points'] == 0:
+        console.print(question_answer_store[question_key]["question"], style='bold')
+
+        # Print the choices & color the user's answer(s) red
+        for choice_key, choice in question_answer_store[question_key]['choices'].items():
+            if choice_key in question_result['guess']:
+                console.print(f'[bold]{choice_key}[/bold]. {choice} [medium_purple4](Your guess)[/medium_purple4]', style='red')
+
+            elif choice_key in question_answer_store[question_key]['answer']:
+                console.print(f'[bold]{choice_key}[/bold]. {choice}', style='dark_olive_green2')
+
+            else:
+                console.print(f'[bold]{choice_key}[/bold]. {choice}', style='steel_blue')
+
+        console.print(question_answer_store[question_key]["explanation"], style='sky_blue3')
+
+        console.rule()
 
 
 
